@@ -10,19 +10,6 @@ class GraphAnalyzer:
     
     def __init__(self):
         self.graph = nx.Graph()
-        """Generates an Erdos–Renyi graph based on the threshold p = c * ln(n) / n."""
-        if n <= 0:
-            raise ValueError("Number of nodes must be positive.")
-        
-        # Calculate probability based on the provided formula
-        p = (c * math.log(n)) / n
-        p = min(max(p, 0), 1)  # Ensure p stays within [0, 1]
-        
-        # Nodes must be strings as per requirements
-        self.graph = nx.erdos_renyi_graph(n, p)
-        mapping = {i: str(i) for i in self.graph.nodes()}
-        self.graph = nx.relabel_nodes(self.graph, mapping)
-        print(f"Generated Erdős–Rényi graph: n={n}, p={p:.4f}")
 
     def load_from_gml(self, file_path):
         """Imports a graph from a .gml file with error handling."""
@@ -43,6 +30,10 @@ class GraphAnalyzer:
 
     def perform_analysis(self):
         """Computes structural metrics of the graph."""
+        if self.graph.number_of_nodes() == 0:
+            print("Graph is empty. No analysis performed.")
+            return
+        
         print("\n--- Graph Analysis ---")
         
         # Connected Components
@@ -74,13 +65,13 @@ class GraphAnalyzer:
 
     def multi_bfs(self, start_nodes):
         """Performs BFS from multiple sources and tracks paths."""
-        # logic for BFS and path storage goes here
         for node in start_nodes:
             if node not in self.graph:
                 print(f"Warning: Node {node} not found in graph.")
                 continue
-            # Use nx.bfs_tree or custom implementation
             print(f"Computing BFS tree for root: {node}")
+            node_bfs_tree = nx.bfs_tree(self.graph, source=node)
+            print(f"{list(node_bfs_tree.nodes())}")
 
     def plot_graph(self):
         """Visualizes the graph using Matplotlib."""
@@ -100,6 +91,9 @@ class GraphAnalyzer:
         n: Number of nodes
         c: Constant factor for the threshold p = c * ln(n) / n
         """
+        if n <= 0:
+            raise ValueError("Number of nodes must be positive.")
+
         if n <= 1:
             # Minimum 2 nodes needed for edges
             self.graph.add_nodes_from([str(i) for i in range(int(n))])
