@@ -28,6 +28,37 @@ class GraphAnalyzer:
         nx.write_gml(self.graph, file_path)
         print(f"Graph saved to {file_path}")
 
+    def find_connected_components(self):
+        """Identifies connected components and labels nodes with component IDs."""
+        visited = set()
+        components = []
+        
+        for node in self.graph.nodes():
+            if node not in visited:
+                # Start a new BFS/DFS to find all nodes in this component
+                comp_queue = [node]
+                current_component = {node}
+                visited.add(node)
+                
+                idx = 0
+                while idx < len(comp_queue):
+                    u = comp_queue[idx]
+                    idx += 1
+                    for v in self.graph.neighbors(u):
+                        if v not in visited:
+                            visited.add(v)
+                            current_component.add(v)
+                            comp_queue.append(v)
+                
+                components.append(current_component)
+                
+        # Annotate nodes with their component ID
+        for i, component in enumerate(components):
+            for node in component:
+                self.graph.nodes[node]['component_id'] = i
+        
+        return len(components)
+    
     def perform_analysis(self):
         """Computes structural metrics of the graph."""
         if self.graph.number_of_nodes() == 0:
@@ -62,28 +93,95 @@ class GraphAnalyzer:
             print(f"Average Shortest Path: {avg_path:.4f}")
         else:
             print("Average Shortest Path: N/A (Graph is disconnected)")
+    
+    def run_single_bfs(self, start_node):
+        """
+        Performs a manual BFS from a single source.
+        Returns dictionaries for distances and parents.
+        """
+        distances = {node: float('inf') for node in self.graph.nodes()}
+        parents = {node: None for node in self.graph.nodes()}
+        
+        distances[start_node] = 0
+        queue = [start_node]
+        visited = {start_node}
 
+        while queue:
+            current = queue.pop(0)
+            for neighbor in self.graph.neighbors(current):
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    distances[neighbor] = distances[current] + 1
+                    parents[neighbor] = current
+                    queue.append(neighbor)
+        
+        return distances, parents
+    
     def multi_bfs(self, start_nodes):
-        """Performs BFS from multiple sources and tracks paths."""
-        for node in start_nodes:
-            if node not in self.graph:
-                print(f"Warning: Node {node} not found in graph.")
+        """Computes BFS from each source and stores paths/distances in the graph."""
+        for root in start_nodes:
+            if root not in self.graph:
+                print(f"Warning: Node {root} not found.")
                 continue
-            print(f"Computing BFS tree for root: {node}")
-            node_bfs_tree = nx.bfs_tree(self.graph, source=node)
-            print(f"{list(node_bfs_tree.nodes())}")
+                
+            print(f"Computing BFS for root: {root}")
+            distances, parents = self.run_single_bfs(root)
+            
+            # Store attributes for GML export
+            for node in self.graph.nodes():
+                self.graph.nodes[node][f'bfs_{root}_dist'] = distances[node]
+                # Convert parent to string or "None" for GML compatibility
+                self.graph.nodes[node][f'bfs_{root}_parent'] = str(parents[node])
 
-    def plot_graph(self):
-        """Visualizes the graph using Matplotlib."""
-        plt.figure(figsize=(10, 8))
-        pos = nx.spring_layout(self.graph)
+    def plot_graph(self, bfs_roots=None):
+        """Visualizes the graph with highlighted paths and isolated nodes."""
+        plt.figure(figsize=(12, 8))
+        pos = nx.spring_layout(self.graph, k=0.15, iterations=20)
         
-        # Basic drawing
-        nx.draw(self.graph, pos, with_labels=True, node_size=300, 
-                node_color="skyblue", font_size=8)
+        # Identify isolated nodes for distinct styling
+        isolated = [n for n, d in self.graph.degree() if d == 0]
+        others = [n for n in self.graph.nodes() if n not in isolated]
+
+        # Draw Nodes
+        nx.draw_networkx_nodes(self.graph, pos, nodelist=others, node_color="skyblue", node_size=300)
+        nx.draw_networkx_nodes(self.graph, pos, nodelist=isolated, node_color="orange", node_size=400, label="Isolated")
         
-        plt.title("Graph Visualization")
+        # Draw standard edges
+        nx.draw_networkx_edges(self.graph, pos, alpha=0.3)
+        
+        # Highlight BFS paths if roots were provided
+        if bfs_roots:
+            colors = ['red', 'green', 'purple', 'blue']
+            for i, root in enumerate(bfs_roots):
+                if root in self.graph:
+                    # Use your existing single_bfs to get parents
+                    _, parents = self.run_single_bfs(root)
+                    edges = self.get_path_to_root_edges(parents)
+                    nx.draw_networkx_edges(self.graph, pos, edgelist=edges, 
+                                        edge_color=colors[i % len(colors)], width=2, label=f"Path from {root}")
+
+        nx.draw_networkx_labels(self.graph, pos, font_size=8)
+        plt.title("Erdős–Rényi Graph Analysis")
+        plt.legend()
         plt.show()
+
+    def get_path_to_root_edges(self, parents):
+        """Helper to convert parent pointers into a list of edges for plotting."""
+        edges = []
+        for node, parent in parents.items():
+            if parent is not None:
+                edges.append((parent, node))
+        return edges
+    
+    def get_path_to_root(self, target_node, parents):
+        """Backtracks from target to source using the parents dictionary."""
+        path_edges = []
+        curr = target_node
+        while parents[curr] is not None:
+            path_edges.append((parents[curr], curr))
+            curr = parents[curr]
+        return path_edges
+
 
     def create_random_graph(self, n, c):
         """
@@ -151,7 +249,8 @@ def main():
         analyzer.perform_analysis()
 
     if args.plot:
-        analyzer.plot_graph()
+        # Pass the BFS roots to the plotter so it knows what to highlight
+        analyzer.plot_graph(bfs_roots=args.multi_BFS)
 
     if args.output:
         analyzer.save_to_gml(args.output)
