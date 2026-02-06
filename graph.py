@@ -10,6 +10,7 @@ class GraphAnalyzer:
     
     def __init__(self):
         self.graph = nx.Graph()
+        self.bfs_trees = {}  # Stores results as {root: (distances, parents)}
 
     def load_from_gml(self, file_path):
         """Imports a graph from a .gml file with error handling."""
@@ -65,11 +66,12 @@ class GraphAnalyzer:
             print("Graph is empty. No analysis performed.")
             return
         
-        print("\n--- Graph Analysis ---")
+        print("\nGraph Analysis:")
         
         # Connected Components
-        components = list(nx.connected_components(self.graph))
-        print(f"Connected Components: {len(components)}")
+        num_components = self.find_connected_components() 
+        print(f"Connected Components: {num_components}")
+        self.graph.graph['num_connected_components'] = num_components
 
         # Cycle Detection
         try:
@@ -78,14 +80,19 @@ class GraphAnalyzer:
         except nx.NetworkXNoCycle:
             has_cycle = False
         print(f"Contains Cycles: {has_cycle}")
+        self.graph.graph['has_cycles'] = int(has_cycle) # Store as 1 or 0 for GML
 
         # Isolated Nodes
         isolated = list(nx.isolates(self.graph))
-        print(f"Isolated Nodes: {len(isolated)} ({isolated[:10]}...)")
+        print(f"Isolated Nodes: {len(isolated)}")
+        # Optionally mark nodes as isolated in their attributes
+        for node in self.graph.nodes():
+            self.graph.nodes[node]['is_isolated'] = int(node in isolated)
 
         # Density
         density = nx.density(self.graph)
         print(f"Graph Density: {density:.4f}")
+        self.graph.graph['density'] = density
 
         # Avg Shortest Path (only if connected)
         if nx.is_connected(self.graph):
@@ -118,7 +125,7 @@ class GraphAnalyzer:
         return distances, parents
     
     def multi_bfs(self, start_nodes):
-        """Computes BFS from each source and stores paths/distances in the graph."""
+        """Computes BFS from each source and caches results."""
         for root in start_nodes:
             if root not in self.graph:
                 print(f"Warning: Node {root} not found.")
@@ -126,7 +133,8 @@ class GraphAnalyzer:
                 
             print(f"Computing BFS for root: {root}")
             distances, parents = self.run_single_bfs(root)
-            
+            self.bfs_trees[root] = (distances, parents) # Cache the results
+
             # Store attributes for GML export
             for node in self.graph.nodes():
                 self.graph.nodes[node][f'bfs_{root}_dist'] = distances[node]
@@ -134,35 +142,37 @@ class GraphAnalyzer:
                 self.graph.nodes[node][f'bfs_{root}_parent'] = str(parents[node])
 
     def plot_graph(self, bfs_roots=None):
-        """Visualizes the graph with highlighted paths and isolated nodes."""
-        plt.figure(figsize=(12, 8))
-        pos = nx.spring_layout(self.graph, k=0.15, iterations=20)
-        
-        # Identify isolated nodes for distinct styling
-        isolated = [n for n, d in self.graph.degree() if d == 0]
-        others = [n for n in self.graph.nodes() if n not in isolated]
+        if not bfs_roots:
+            # Standard single plot logic...
+            return
 
-        # Draw Nodes
-        nx.draw_networkx_nodes(self.graph, pos, nodelist=others, node_color="skyblue", node_size=300)
-        nx.draw_networkx_nodes(self.graph, pos, nodelist=isolated, node_color="orange", node_size=400, label="Isolated")
-        
-        # Draw standard edges
-        nx.draw_networkx_edges(self.graph, pos, alpha=0.3)
-        
-        # Highlight BFS paths if roots were provided
-        if bfs_roots:
-            colors = ['red', 'green', 'purple', 'blue']
-            for i, root in enumerate(bfs_roots):
-                if root in self.graph:
-                    # Use your existing single_bfs to get parents
-                    _, parents = self.run_single_bfs(root)
-                    edges = self.get_path_to_root_edges(parents)
-                    nx.draw_networkx_edges(self.graph, pos, edgelist=edges, 
-                                        edge_color=colors[i % len(colors)], width=2, label=f"Path from {root}")
+        num_roots = len(bfs_roots)
+        fig, axes = plt.subplots(1, num_roots, figsize=(6 * num_roots, 6), squeeze=False)
+        pos = nx.spring_layout(self.graph, k=0.15, seed=42) # Fixed seed for comparison
 
-        nx.draw_networkx_labels(self.graph, pos, font_size=8)
-        plt.title("Erdős–Rényi Graph Analysis")
-        plt.legend()
+        for i, root in enumerate(bfs_roots):
+            ax = axes[0, i]
+            if root not in self.bfs_trees:
+                ax.set_title(f"Root {root} not found")
+                continue
+
+            # Draw base graph
+            nx.draw_networkx_nodes(self.graph, pos, ax=ax, node_color="skyblue", node_size=200)
+            nx.draw_networkx_edges(self.graph, pos, ax=ax, alpha=0.1)
+            
+            # Highlight BFS Tree
+            _, parents = self.bfs_trees[root]
+            edges = self.get_path_to_root_edges(parents)
+            nx.draw_networkx_edges(self.graph, pos, edgelist=edges, ax=ax, 
+                                edge_color="red", width=2)
+            
+            # Highlight the Root itself
+            nx.draw_networkx_nodes(self.graph, pos, nodelist=[root], ax=ax, 
+                                node_color="yellow", node_size=400, label="Root")
+            
+            ax.set_title(f"BFS Tree from Root: {root}")
+
+        plt.tight_layout()
         plt.show()
 
     def get_path_to_root_edges(self, parents):
