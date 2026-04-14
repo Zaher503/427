@@ -142,7 +142,12 @@ def crawl_with_scrapy(max_nodes, domain, start_urls):
         die(f"Could not extract a hostname from domain value '{domain}'.")
 
     # Mutable shared state - populated by the spider during the crawl.
-    collected = {'nodes': set(), 'edges': set()}
+    collected = {
+        'nodes': set(),
+        'edges': set(),
+        'scheduled': set(),
+        'failures': collections.Counter(),
+    }
 
     # Inner spider class (closure over collected, allowed_domain, etc.)
     class LinkSpider(scrapy.Spider):
@@ -164,23 +169,33 @@ def crawl_with_scrapy(max_nodes, domain, start_urls):
             'USER_AGENT': (
                 'Mozilla/5.0 (compatible; PageRankCrawler/1.0)'
             ),
-            # Disable duplicate-URL filtering so all discovered links are
-            # reported even if the target page has already been queued.
-            'DUPEFILTER_CLASS': 'scrapy.dupefilters.BaseDupeFilter',
         }
 
         def start_requests(self):
             for url in start_urls:
+                norm = _normalize_url(url)
+                collected['scheduled'].add(norm)
                 yield scrapy.Request(
                     url,
                     callback=self.parse,
                     errback=self.on_error,
                     dont_filter=True,
+                    meta={'norm_url': norm},
                 )
 
         def on_error(self, failure):
-            # Silently skip pages that cannot be fetched.
-            pass
+            request = failure.request
+            target = request.meta.get('norm_url', _normalize_url(request.url))
+            collected['failures'][target] += 1
+
+            # Allow the URL to be rediscovered later if this fetch failed.
+            if target not in collected['nodes']:
+                collected['scheduled'].discard(target)
+
+            fail_count = sum(collected['failures'].values())
+            if fail_count <= 5 or fail_count % 10 == 0:
+                print(f"  ... {fail_count} request failures so far "
+                      f"(latest: {target})")
 
         def parse(self, response):
             # Only process HTML pages.
@@ -196,7 +211,7 @@ def crawl_with_scrapy(max_nodes, domain, start_urls):
             if source not in collected['nodes']:
                 collected['nodes'].add(source)
                 n = len(collected['nodes'])
-                if n % 10 == 0 or n == 1:
+                if n <= 10 or n % 10 == 0:
                     print(f"  ... {n} nodes crawled")
 
             # Hard stop once we have enough nodes.
@@ -221,19 +236,25 @@ def crawl_with_scrapy(max_nodes, domain, start_urls):
                 # Record the directed edge source -> target.
                 collected['edges'].add((source, target))
 
-                # Queue the target for crawling only if unseen and under cap.
-                if (target not in collected['nodes']
+                # Queue the target only once per normalized URL. Without this,
+                # densely linked sites like DBLP can flood the scheduler with
+                # duplicate requests and appear to stall between progress logs.
+                if (target not in collected['scheduled']
                         and len(collected['nodes']) < max_nodes):
+                    collected['scheduled'].add(target)
                     yield scrapy.Request(
                         link.url,
                         callback=self.parse,
                         errback=self.on_error,
+                        meta={'norm_url': target},
                     )
 
     # Run the spider (blocks until finished or max_nodes reached)
     print(f"Starting Scrapy crawl  (domain={allowed_domain}, "
           f"max_nodes={max_nodes}) ...")
-    process = CrawlerProcess()
+    process = CrawlerProcess(settings={
+        'LOG_ENABLED': False,
+    })
     process.crawl(LinkSpider)
     process.start()  # Twisted reactor runs here; blocks until spider stops.
 
